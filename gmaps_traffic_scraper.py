@@ -1,4 +1,4 @@
-"""
+  """
 Sam Hardy
 
 Scrape Google Maps for drivetimes, no need for fancy API's or paid subscriptions!
@@ -83,8 +83,12 @@ def get_distance_and_time(start_latlong: list, end_latlong: list) -> dict:
         for g in bi:
             for h in range(10):
                 if route[g-h] == '"':
-                    timeminutes_alot.append(route[g-h+1:g].strip())
-                    break
+
+                    # Added new code to handle GMaps recent changes
+                    a = route[g-h+1:g].strip()
+                    if '–' not in a: # it's not a - dash, but a different weird character!
+                        timeminutes_alot.append(route[g-h+1:g].strip())
+                        break
         timeminutes_alot1 = []
         for item in timeminutes_alot:
             if "-" not in item:
@@ -157,16 +161,10 @@ def write_or_append_to_csv(d: dict):
     '''
     Write/append results to a csv file, for later analysis or visualization (like with JMP)
     '''
+
     path = r'traffic_table_results.csv'
 
     if os.path.isfile(path):
-        
-        with open(path) as file_obj:
-            reader_obj = csv.reader(file_obj)
-            existing_rows = next(reader_obj)
-            for key in list(d.keys()):
-                if key not in existing_rows:
-                    del d[key] # remove any extra data columns to avoid formatting errors
         
         pddf = pd.DataFrame([d])
         pddf.to_csv(path, mode='a', index=False, header=False)
@@ -177,6 +175,44 @@ def write_or_append_to_csv(d: dict):
         pddf.to_csv(path, index=False)
 
 
+def downselect_optimal_t_route(d: dict) -> dict:
+    '''
+    Takes a full results dictionary (with multiple distance/time routes), and keeps only the best cooresponding time.
+    Reason for this is to standardize results table, and avoid any potential formatting errors
+    '''
+
+    routes_t = {key: d[key] for key in d.keys() if '_time_minutes' in key and not d[key] == ''}
+
+    routes_d = {key: d[key] for key in d.keys() if '_distance_miles' in key and not d[key] == ''}
+
+    min_t = min(routes_t.values())
+    lrk = list(routes_t.keys())
+    lrv = list(routes_t.values())
+    mrt = [lrk[i].strip('_time_minutes') for i in range(len(lrk)) if lrv[i] == min_t]
+
+    # If a tie for minimum time, just pick the shortest distance then
+    mrt_d_options = {}
+    for r in mrt:
+        mrt_d_options.update(dict(filter(lambda item: r in item[0], routes_d.items())))
+
+    mrt_d = min(mrt_d_options.keys(), key=(lambda k: mrt_d_options[k])).strip('_distance_miles')
+
+    # Now remove the non-optimized route options
+    d_opt = {}
+    for key in d.keys():
+        new_key = key
+        if ('_time_minutes' in key or '_distance_miles' in key):
+            if mrt_d not in key:
+                continue
+            if '_time_minutes' in key:
+                new_key = 'optimal_drive_time_minutes'
+            elif '_distance_miles' in key:
+                new_key = 'optimal_drive_distance_miles'
+        d_opt[new_key] = d[key]
+
+    return d_opt
+
+
 if __name__ == '__main__':
     
     # Depending on speed / interest, choice for single pre-defined ping, or multiple pre-defined pings
@@ -184,8 +220,12 @@ if __name__ == '__main__':
     MULTI_PING = 1
     
     print('Writing to CSV file...')
+
+    # Added in program runtime diagnostics
+    t0 = time.time()
+    elapsed = time.time() - t0
     
-    coords = get_coords('bay_area_lats_longs.json') # Reference bay area landmarks
+    coords = get_coords('bay_area_lats_longs.json') # Reference bay area landmarks. Careful--if too many risk hitting the reCAPTCHA :(
     
     if SINGLE_PING:
         
@@ -200,8 +240,9 @@ if __name__ == '__main__':
         route['route'] = start_point + '_to_' + end_point
     
         results = {**route, **dt, **timestamp}
+        results_opt = downselect_optimal_t_route(results)
     
-        write_or_append_to_csv(results)
+        write_or_append_to_csv(results_opt)
     
     if MULTI_PING:
         
@@ -225,11 +266,15 @@ if __name__ == '__main__':
                 route['route'] = start_point + '_to_' + end_point
                 
                 results = {**route, **dt, **timestamp}
+                results_opt = downselect_optimal_t_route(results)
 
                 print(f"Publishing analysis of {route['route']}...")
-                write_or_append_to_csv(results)
+                write_or_append_to_csv(results_opt)
                 
                 # Attempting to workaround the CAPTCHA rate-limiter.  ie don't ping too frequently or a flag will be raised :(
                 time.sleep(10)
-    
-    print('CSV writing done, program complete!')
+
+    # Added in program runtime diagnostics
+    elapsed = time.time() - t0
+
+    print(f'CSV writing done, program complete in {elapsed} seconds!')
